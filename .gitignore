@@ -1,0 +1,45 @@
+# ── 数据目录（账号库 + 邮件缓存，含敏感信息） ──
+data/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# ── 虚拟环境 ──
+venv/
+.venv/
+env/
+.env
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 浏览器自动化残留 ──
+.playwright-mcp/
+
+# ── 临时截图 ──
+*.png
+*.jpg
+*.jpeg
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── 日志 ──
+*.log
+
+# ── 环境变量文件（如使用了 .env 管理密码） ──
+.env
+.env.local

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN" data-visual="moyu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>iCloud邮箱管理面板</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brandBlock">
+        <div class="brand">iCloud邮箱管理面板</div>
+        <div class="muted">批量归档 · 快速选箱 · 历史邮件取阅</div>
+      </div>
+
+      <div class="box">
+        <div class="sectionTitle">总览</div>
+        <div class="statsGrid">
+          <div class="stat"><span>邮箱总数</span><b id="s-total">0</b></div>
+          <div class="stat"><span>可收信</span><b id="s-source">0</b></div>
+          <div class="stat"><span>已缓存</span><b id="s-cached">0</b></div>
+          <div class="stat"><span>邮件数量</span><b id="s-mails">0</b></div>
+          <div class="stat dangerStat"><span>异常账号</span><b id="s-errors">0</b></div>
+        </div>
+        <div class="toolbar scanActions">
+          <button id="scan-all-btn" type="button">扫描历史</button>
+          <button id="retry-failed-btn" class="secondary" type="button">重试失败</button>
+          <button id="cancel-scan-btn" class="softDanger" type="button" style="display:none">取消扫描</button>
+          <span class="pill" id="scan-status-pill">空闲</span>
+        </div>
+        <div class="scanBar"><div class="scanFill" id="scan-fill"></div></div>
+        <div class="muted" id="scan-status-text">导入后会自动扫描历史邮件</div>
+        <div class="scanLog" id="scan-log"></div>
+      </div>
+
+      <details class="box fold">
+        <summary>批量导入</summary>
+        <div class="foldBody">
+          <div class="uploadBox">
+            <input class="srFile" id="file-input" type="file" accept=".txt,text/plain">
+            <label class="filePick" for="file-input"><span class="fileCode">TXT</span><span>选择文件</span></label>
+            <span class="fileName" id="file-name">未选择文件</span>
+          </div>
+          <textarea id="import-text" spellcheck="false" placeholder="name@icloud.com----http://example.com/show/.../name@icloud.com"></textarea>
+          <div class="toolbar"><button id="import-btn" type="button">导入邮箱</button></div>
+        </div>
+      </details>
+
+      <div class="box">
+        <div class="sectionTitle">邮箱列表</div>
+        <div class="row">
+          <input id="search-input" type="search" placeholder="搜索邮箱">
+          <button class="secondary" type="button" id="clear-search-btn">清空</button>
+        </div>
+        <div class="filterChips" id="filter-chips">
+          <button class="chip active" data-filter="all" type="button">全部</button>
+          <button class="chip" data-filter="error" type="button">异常</button>
+          <button class="chip" data-filter="no_history" type="button">无历史</button>
+          <button class="chip" data-filter="cached" type="button">已缓存</button>
+          <button class="chip" data-filter="has_mail" type="button">有邮件</button>
+        </div>
+        <div class="pager">
+          <button class="secondary" type="button" id="reload-btn">刷新</button>
+          <div class="muted" id="account-sub">0 个账号</div>
+          <button class="secondary" type="button" id="logout-btn">退出</button>
+        </div>
+      </div>
+
+      <div class="aliases" id="account-list"></div>
+
+      <details class="box fold">
+        <summary>操作记录</summary>
+        <div class="foldBody">
+          <div class="toolbar"><button class="secondary" id="clear-log-btn" type="button">清空记录</button></div>
+          <div class="logBox" id="log-list"></div>
+        </div>
+      </details>
+    </aside>
+
+    <main class="main">
+      <div class="top">
+        <div>
+          <div class="brand" id="mail-title">请选择邮箱</div>
+          <div class="muted" id="mail-sub">选择左侧邮箱后查看历史邮件</div>
+        </div>
+        <div class="toolbar topActions">
+          <span class="pill" id="modePill">iCloud</span>
+          <button id="fetch-btn" type="button" disabled>刷新邮件</button>
+          <button id="clear-cache-btn" class="secondary" type="button" disabled>清缓存</button>
+          <button id="delete-btn" class="softDanger" type="button" disabled>删除邮箱</button>
+          <button class="secondary" id="themeToggle" type="button">深色</button>
+          <button class="secondary" id="visualToggle" type="button">极简模式</button>
+        </div>
+      </div>
+
+      <details class="box fold mailTools">
+        <summary>筛选 / 查看说明</summary>
+        <div class="foldBody">
+          <div class="filterGrid">
+            <input id="mail-search-placeholder" placeholder="邮件筛选预留：发件人 / 主题 / 正文" disabled>
+            <input placeholder="验证码筛选预留" disabled>
+            <input type="date" disabled>
+            <input type="date" disabled>
+          </div>
+          <div class="toolbar">
+            <span class="pill">按需拉取</span>
+            <span class="pill">本地缓存</span>
+            <span class="pill">不保存密码</span>
+          </div>
+        </div>
+      </details>
+
+      <section class="messages">
+        <div class="list" id="mail-list"><div class="empty">暂无邮件</div></div>
+        <div class="detail" id="mail-detail"><div class="empty">选择一封邮件查看内容。</div></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="login-screen" id="login-screen">
+    <form class="modalCard login-card" id="login-form">
+      <div class="modalTitle">访问密钥</div>
+      <div class="modalText">输入本地面板密码后进入邮箱管理台。</div>
+      <input id="password-input" type="password" autocomplete="current-password" placeholder="面板密码">
+      <div class="toolbar loginActions">
+        <span class="pill">本地 · 离线安全</span>
+        <button type="submit">进入</button>
+      </div>
+      <div class="err" id="login-error"></div>
+    </form>
+  </div>
+
+  <div class="toastStack" id="toastStack" aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
