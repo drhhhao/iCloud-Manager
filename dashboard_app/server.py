@@ -4,7 +4,7 @@ from dashboard_app.config import settings
 from dashboard_app.http_server import create_server
 
 
-def main(host: str = "127.0.0.1", port: int = 8799) -> int:
+def main(host: str = "127.0.0.1", port: int = settings.default_port) -> int:
     server = create_server(host, port)
     print(f"[ok] iCloud 邮箱管理面板已启动: http://{host}:{port}/")
     if settings.panel_password == "changeme":

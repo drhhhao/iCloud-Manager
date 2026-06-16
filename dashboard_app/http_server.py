@@ -46,15 +46,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         status: int = 200,
         headers: dict[str, str] | None = None,
     ) -> None:
+        extra = headers or {}
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        if not any(key.lower() == "cache-control" for key in extra):
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'")
-        for key, value in (headers or {}).items():
+        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
+        for key, value in extra.items():
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(data)
@@ -98,20 +100,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
-        if path in {"/", "/index.html"}:
-            self._serve_template()
-            return
-        if path.startswith("/static/"):
-            self._serve_static(path)
-            return
-        if path == "/favicon.ico":
-            self._send_bytes(b"", "image/x-icon", status=204)
-            return
         if path == "/api/session":
             self._send_json({"ok": True, "authenticated": self._authenticated()})
             return
         if not path.startswith("/api/"):
-            self._send_json({"ok": False, "error": "Not found"}, status=404)
+            self._serve_frontend(path)
             return
         if not self._require_auth():
             return
@@ -250,27 +243,51 @@ class DashboardHandler(BaseHTTPRequestHandler):
         cookie = f"{settings.session_cookie}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
         self._send_json({"ok": True}, headers={"Set-Cookie": cookie})
 
-    def _serve_template(self) -> None:
-        if not settings.template_path.is_file():
-            self._send_bytes(b"template missing", "text/plain; charset=utf-8", status=500)
-            return
-        self._send_bytes(settings.template_path.read_bytes(), "text/html; charset=utf-8")
+    def _serve_frontend(self, url_path: str) -> None:
+        web_dir = settings.web_dir
+        index_file = web_dir / "index.html"
 
-    def _serve_static(self, url_path: str) -> None:
-        rel = urllib.parse.unquote(url_path.removeprefix("/static/"))
-        target = (settings.static_dir / rel).resolve()
+        # If the Next.js export is missing, show a helpful message instead of a blank page.
+        if not index_file.is_file():
+            hint = (
+                "前端尚未构建。请先在项目根目录运行 `npm install && npm run build` 生成 out/ 目录，"
+                "或直接使用 `python start_panel.py` 自动构建。"
+            )
+            self._send_bytes(hint.encode("utf-8"), "text/plain; charset=utf-8", status=503)
+            return
+
+        rel = urllib.parse.unquote(url_path.lstrip("/"))
+        if rel in {"", "index.html"}:
+            self._send_file(index_file)
+            return
+
+        target = (web_dir / rel).resolve()
         try:
-            target.relative_to(settings.static_dir.resolve())
+            target.relative_to(web_dir.resolve())
         except ValueError:
-            self._send_json({"ok": False, "error": "Invalid static path"}, status=400)
+            self._send_json({"ok": False, "error": "Invalid path"}, status=400)
             return
-        if not target.is_file():
-            self._send_json({"ok": False, "error": "Not found"}, status=404)
+
+        # Static export emits a per-route file; fall back to a trailing .html, then SPA index.
+        if target.is_file():
+            self._send_file(target)
             return
+        html_variant = target.with_suffix(".html")
+        if html_variant.is_file():
+            self._send_file(html_variant)
+            return
+        # Unknown non-asset route: let the SPA handle it client-side.
+        self._send_file(index_file)
+
+    def _send_file(self, target: Path) -> None:
         mime = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         if target.suffix == ".js":
             mime = "text/javascript"
-        self._send_bytes(target.read_bytes(), f"{mime}; charset=utf-8")
+        if target.suffix in {".js", ".css", ".html", ".json", ".svg"}:
+            mime = f"{mime}; charset=utf-8"
+        # Long-cache hashed Next.js assets, never cache HTML.
+        cache = "public, max-age=31536000, immutable" if "/_next/static/" in target.as_posix() else "no-store"
+        self._send_bytes(target.read_bytes(), mime, headers={"Cache-Control": cache})
 
 
 def _cache_needs_original_html(cache: dict[str, Any] | None) -> bool:

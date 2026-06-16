@@ -14,7 +14,9 @@ class Settings:
     accounts_path: Path
     template_path: Path
     static_dir: Path
+    web_dir: Path
     panel_password: str
+    default_port: int = 17607
     session_cookie: str = "ICLOUD_PANEL_SESSION"
     session_ttl_seconds: int = 7 * 24 * 60 * 60
     max_json_body_bytes: int = 24 * 1024 * 1024
@@ -46,6 +48,7 @@ settings = Settings(
     accounts_path=ROOT / "data" / "accounts.json",
     template_path=PACKAGE_DIR / "templates" / "index.html",
     static_dir=PACKAGE_DIR / "static",
+    web_dir=ROOT / "out",
     panel_password=os.environ.get("ICLOUD_PANEL_PASSWORD", "changeme"),
     scan_workers=_env_int("ICLOUD_SCAN_WORKERS", 5, 1, 16),
     fetch_timeout_seconds=_env_int("ICLOUD_FETCH_TIMEOUT", 25, 5, 90),
