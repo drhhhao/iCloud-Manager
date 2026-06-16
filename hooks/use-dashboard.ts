@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { api, ApiError } from "@/lib/api"
+import { api, ApiError, sessionStatus } from "@/lib/api"
 import { messagesFromCache, normalizeMessage, normalizeDateOnly } from "@/lib/mail"
 import type {
   Account,
@@ -36,9 +36,8 @@ let toastSeq = 0
 let logSeq = 0
 
 export function useDashboard() {
-  // 访问密钥功能已停用：默认始终视为已登录。
-  const [authenticated, setAuthenticated] = useState(true)
-  const [authChecked, setAuthChecked] = useState(true)
+  const [authenticated, setAuthenticated] = useState(false)
+  const [authChecked, setAuthChecked] = useState(false)
   const [connOk, setConnOk] = useState(true)
 
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -203,13 +202,14 @@ export function useDashboard() {
   )
 
   const checkSession = useCallback(async () => {
-    // 访问密钥功能已停用：直接加载数据，无需校验会话。
     try {
-      setAuthenticated(true)
+      const data = await sessionStatus()
+      setAuthenticated(Boolean(data.authenticated))
       setAuthChecked(true)
-      await loadState(false)
+      if (data.authenticated) await loadState(false)
     } catch {
       setConnOk(false)
+      setAuthenticated(false)
       setAuthChecked(true)
     }
   }, [loadState])

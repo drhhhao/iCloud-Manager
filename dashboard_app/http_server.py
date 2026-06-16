@@ -87,8 +87,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return morsel.value if morsel else ""
 
     def _authenticated(self) -> bool:
-        # 访问密钥功能已停用：始终视为已登录。
-        return True
+        return validate_session(self._session_token())
 
     def _require_auth(self) -> bool:
         if self._authenticated():

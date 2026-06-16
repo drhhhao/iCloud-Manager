@@ -11,6 +11,11 @@ build/
 *.egg
 .eggs/
 
+# ── Frontend build/install output ──
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+
 # ── 虚拟环境 ──
 venv/
 .venv/
