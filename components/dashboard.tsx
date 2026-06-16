@@ -10,7 +10,6 @@ import { OperationLog } from "./operation-log"
 import { MailFiltersPanel } from "./mail-filters"
 import { MailList } from "./mail-list"
 import { MailDetail } from "./mail-detail"
-import { LoginOverlay } from "./login-overlay"
 import { ThemeControls } from "./theme-controls"
 import { ToastStack } from "./toast-stack"
 
@@ -144,7 +143,6 @@ export function Dashboard() {
         </main>
       </div>
 
-      <LoginOverlay show={d.authChecked && !d.authenticated} onLogin={d.login} />
       <ToastStack toasts={d.toasts} onDismiss={d.dismissToast} />
     </>
   )
