@@ -8,6 +8,8 @@ from dashboard_app.config import settings
 from dashboard_app.services.mail_parser import messages_from_response
 from dashboard_app.storage.json_store import ensure_dir, read_json, write_json
 
+_DELETED_CACHE = {"_deleted": True}
+
 
 def cache_path(account_id: str) -> Path:
     safe = re.sub(r"[^a-f0-9]", "", str(account_id).lower())[:32]
@@ -15,12 +17,29 @@ def cache_path(account_id: str) -> Path:
 
 
 def has_cache(account_id: str) -> bool:
-    return cache_path(account_id).is_file()
+    payload = read_json(cache_path(account_id), None)
+    return isinstance(payload, dict) and not payload.get("_deleted")
+
+
+def cache_summaries(account_ids: list[str]) -> dict[str, dict[str, Any]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    for account_id in account_ids:
+        path = cache_path(account_id)
+        if not path.is_file():
+            continue
+        payload = read_json(path, {})
+        if not isinstance(payload, dict) or payload.get("_deleted"):
+            continue
+        summaries[account_id] = {
+            "cached": True,
+            "no_history": bool(payload.get("no_history")),
+        }
+    return summaries
 
 
 def load_cache(account_id: str) -> dict[str, Any] | None:
     payload = read_json(cache_path(account_id), None)
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.get("_deleted"):
         return None
     repaired, changed = _repair_legacy_json_body_cache(payload)
     if changed:
@@ -39,7 +58,7 @@ def delete_cache(account_id: str) -> None:
         if path.is_file():
             path.unlink()
     except OSError:
-        pass
+        write_json(path, _DELETED_CACHE)
 
 
 def clear_cache() -> None:
@@ -48,7 +67,7 @@ def clear_cache() -> None:
         try:
             path.unlink()
         except OSError:
-            pass
+            write_json(path, _DELETED_CACHE)
 
 
 def _repair_legacy_json_body_cache(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:

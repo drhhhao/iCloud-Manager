@@ -95,19 +95,18 @@
         </div>
       </div>
 
-      <details class="box fold mailTools">
-        <summary>筛选 / 查看说明</summary>
+      <details class="box fold mailTools" open>
+        <summary>邮件筛选</summary>
         <div class="foldBody">
           <div class="filterGrid">
-            <input id="mail-search-placeholder" placeholder="邮件筛选预留：发件人 / 主题 / 正文" disabled>
-            <input placeholder="验证码筛选预留" disabled>
-            <input type="date" disabled>
-            <input type="date" disabled>
+            <input id="mail-search-input" type="search" placeholder="发件人 / 主题 / 正文">
+            <input id="code-search-input" type="search" inputmode="numeric" placeholder="验证码">
+            <input id="date-from-input" type="date" aria-label="开始日期">
+            <input id="date-to-input" type="date" aria-label="结束日期">
           </div>
           <div class="toolbar">
-            <span class="pill">按需拉取</span>
-            <span class="pill">本地缓存</span>
-            <span class="pill">不保存密码</span>
+            <button class="secondary" id="clear-mail-filter-btn" type="button">清空筛选</button>
+            <span class="pill" id="mail-filter-count">0 封邮件</span>
           </div>
         </div>
       </details>

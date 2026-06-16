@@ -3,6 +3,8 @@ from __future__ import annotations
 import hmac
 import json
 import mimetypes
+import threading
+import time
 import urllib.parse
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +28,10 @@ from dashboard_app.services.scan_jobs import cancel_scan, retry_failed, scan_fai
 from dashboard_app.services.sessions import issue_session, revoke_session, validate_session
 
 
+_LOGIN_FAILURES: dict[str, list[float]] = {}
+_LOGIN_FAILURE_LOCK = threading.RLock()
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     server_version = "iCloudMailPanel/1.0"
 
@@ -44,6 +50,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'")
         for key, value in (headers or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -128,8 +138,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "邮箱不存在"}, status=404)
                 return
             cache = load_cache(account_id)
-            if (_cache_needs_original_html(cache) or cache_has_source_error(cache)) and account.get("source_url"):
-                refreshed = fetch_mail_for_account(account_id, force=True)
+            needs_source_refresh = cache_has_source_error(cache) or _cache_needs_source_snapshot(cache)
+            if needs_source_refresh and account.get("source_url"):
+                refreshed = fetch_mail_for_account(account_id, force=True, record_error=False)
                 if refreshed.get("ok"):
                     self._send_json(refreshed)
                     return
@@ -205,10 +216,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": False, "error": "Not found"}, status=404)
 
     def _handle_login(self, payload: dict[str, Any]) -> None:
+        client = self.client_address[0] if self.client_address else "local"
+        now = time.time()
+        with _LOGIN_FAILURE_LOCK:
+            failures = [ts for ts in _LOGIN_FAILURES.get(client, []) if now - ts < 60]
+            _LOGIN_FAILURES[client] = failures
+            failure_count = len(failures)
+        if failure_count >= 8:
+            self._send_json({"ok": False, "error": "登录失败次数过多，请稍后再试"}, status=429)
+            return
+
         password = str(payload.get("password") or "")
         if not hmac.compare_digest(password, settings.panel_password):
+            with _LOGIN_FAILURE_LOCK:
+                failures = [ts for ts in _LOGIN_FAILURES.get(client, []) if now - ts < 60]
+                failures.append(now)
+                _LOGIN_FAILURES[client] = failures
+                failure_count = len(failures)
+            time.sleep(min(0.25 * failure_count, 1.5))
             self._send_json({"ok": False, "error": "密码不正确"}, status=403)
             return
+        with _LOGIN_FAILURE_LOCK:
+            _LOGIN_FAILURES.pop(client, None)
         token = issue_session()
         cookie = (
             f"{settings.session_cookie}={token}; Path=/; Max-Age={settings.session_ttl_seconds}; "
@@ -257,6 +286,21 @@ def _cache_needs_original_html(cache: dict[str, Any] | None) -> bool:
     if not isinstance(messages, list) or not messages:
         return False
     return not any(isinstance(message, dict) and message.get("html") for message in messages)
+
+
+def _cache_needs_source_snapshot(cache: dict[str, Any] | None) -> bool:
+    if not cache:
+        return False
+    if cache_has_source_error(cache):
+        return True
+    if not cache.get("raw_response"):
+        messages = cache.get("messages")
+        has_message_html = isinstance(messages, list) and any(
+            isinstance(message, dict) and message.get("html") for message in messages
+        )
+        if not has_message_html:
+            return True
+    return _cache_needs_original_html(cache)
 
 
 def create_server(host: str, port: int) -> ThreadingHTTPServer:

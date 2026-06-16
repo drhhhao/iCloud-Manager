@@ -5,7 +5,7 @@ import threading
 from typing import Any
 
 from dashboard_app.config import settings
-from dashboard_app.services.cache import delete_cache, has_cache, load_cache
+from dashboard_app.services.cache import cache_summaries, delete_cache, has_cache
 from dashboard_app.services.time_utils import now_iso
 from dashboard_app.storage.json_store import ensure_dir, read_json, write_json
 from dashboard_app.utils.text import source_host
@@ -44,11 +44,11 @@ def find_account(account_id_value: str) -> tuple[list[dict[str, Any]], dict[str,
     return accounts, None
 
 
-def public_account(account: dict[str, Any]) -> dict[str, Any]:
+def public_account(account: dict[str, Any], cache_summary: dict[str, Any] | None = None) -> dict[str, Any]:
     source_url = str(account.get("source_url") or "")
     item_id = str(account.get("id", ""))
-    cache = load_cache(item_id)
-    no_history = bool(account.get("mail_status") == "no_history" or (cache and cache.get("no_history")))
+    summary = cache_summary if cache_summary is not None else _single_cache_summary(item_id)
+    no_history = bool(account.get("mail_status") == "no_history" or summary.get("no_history"))
     return {
         "id": item_id,
         "email": account.get("email", ""),
@@ -59,23 +59,32 @@ def public_account(account: dict[str, Any]) -> dict[str, Any]:
         "last_fetch_at": account.get("last_fetch_at", ""),
         "last_message_count": int(account.get("last_message_count") or 0),
         "last_error": account.get("last_error", ""),
-        "cached": has_cache(item_id),
+        "cached": bool(summary.get("cached")),
         "no_history": no_history,
     }
 
 
 def public_accounts(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [public_account(account) for account in accounts]
+    summaries = cache_summaries([str(account.get("id", "")) for account in accounts])
+    return [public_account(account, summaries.get(str(account.get("id", "")), {})) for account in accounts]
 
 
 def account_stats(accounts: list[dict[str, Any]]) -> dict[str, int]:
+    summaries = cache_summaries([str(item.get("id", "")) for item in accounts])
     return {
         "total": len(accounts),
         "with_source": sum(1 for item in accounts if item.get("source_url")),
-        "cached": sum(1 for item in accounts if has_cache(str(item.get("id", "")))),
+        "cached": len(summaries),
         "errors": sum(1 for item in accounts if item.get("last_error")),
         "messages": sum(int(item.get("last_message_count") or 0) for item in accounts),
     }
+
+
+def _single_cache_summary(account_id_value: str) -> dict[str, Any]:
+    summary = cache_summaries([account_id_value]).get(account_id_value)
+    if summary is not None:
+        return summary
+    return {"cached": has_cache(account_id_value), "no_history": False}
 
 
 def remove_account(account_id_value: str) -> tuple[bool, list[dict[str, Any]]]:

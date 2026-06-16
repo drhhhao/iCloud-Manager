@@ -19,14 +19,15 @@ export function updateMailboxHeader(account, cache, busy = false) {
 
 export function renderMailList(state, onSelectMessage) {
   const box = $("mail-list");
-  if (!state.messages.length) {
-    const emptyText = state.noHistory ? "无历史邮件" : "暂无缓存邮件";
+  const messages = Array.isArray(state.filteredMessages) ? state.filteredMessages : state.messages;
+  if (!messages.length) {
+    const emptyText = state.mailListEmptyText || (state.noHistory ? "无历史邮件" : "暂无缓存邮件");
     box.innerHTML = `<div class="empty">${emptyText}</div>`;
     renderMailDetail(null, 0, emptyText);
     return;
   }
   box.innerHTML = "";
-  state.messages.forEach((message, index) => {
+  messages.forEach((message, index) => {
     const displayMessage = normalizeMessage(message);
     const item = document.createElement("button");
     item.type = "button";
@@ -46,7 +47,9 @@ export function renderMailList(state, onSelectMessage) {
 export function renderMailDetail(message, totalMessages = 0, emptyText = "邮件内容会显示在这里") {
   const box = $("mail-detail");
   message = normalizeMessage(message);
-  const hasOriginalHtml = Boolean(message?.html);
+  const snapshot = sourceSnapshot(message);
+  const snapshotHtml = snapshotHtmlFromSource(snapshot);
+  const hasOriginalHtml = Boolean(message?.html || snapshotHtml);
   const code = String(message?.verification_code || "").trim();
   const shouldUseFullWidth = hasOriginalHtml && totalMessages <= 1;
   box.classList.toggle("raw-mail-detail", hasOriginalHtml);
@@ -57,21 +60,11 @@ export function renderMailDetail(message, totalMessages = 0, emptyText = "邮件
     return;
   }
   if (message.html) {
-    const frame = document.createElement("iframe");
-    frame.className = "mail-frame";
-    frame.title = message.subject || "原始邮件";
-    frame.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
-    frame.setAttribute("referrerpolicy", "no-referrer-when-downgrade");
-    frame.srcdoc = withBaseHref(message.html, message.base_url || "");
-    if (code) {
-      const shell = document.createElement("div");
-      shell.className = "mail-html-shell";
-      shell.appendChild(codeCard(code));
-      shell.appendChild(frame);
-      box.replaceChildren(shell);
-    } else {
-      box.replaceChildren(frame);
-    }
+    renderHtmlDetail(box, message.html, message.base_url || snapshot?.source_url || "", message.subject || "原始邮件", code);
+    return;
+  }
+  if (snapshot && (snapshotHtml || snapshot.raw_response)) {
+    renderSnapshotDetail(box, snapshot, snapshotHtml, message, code);
     return;
   }
   box.innerHTML = `
@@ -85,6 +78,117 @@ export function renderMailDetail(message, totalMessages = 0, emptyText = "邮件
     <pre class="detail-body raw-text-body">${escapeHtml(message.body || "")}</pre>
   `;
   bindCodeCopy(box);
+}
+
+function renderHtmlDetail(box, html, baseUrl, title, code) {
+  const frame = createMailFrame(html, baseUrl, title);
+  if (code) {
+    const shell = document.createElement("div");
+    shell.className = "mail-html-shell";
+    shell.appendChild(codeCard(code));
+    shell.appendChild(frame);
+    box.replaceChildren(shell);
+  } else {
+    box.replaceChildren(frame);
+  }
+  bindCodeCopy(box);
+}
+
+function sourceSnapshot(message) {
+  const snapshot = message?.source_snapshot;
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const raw = String(snapshot.raw_response || "");
+  if (!raw) return null;
+  return {
+    content_type: String(snapshot.content_type || ""),
+    parse_mode: String(snapshot.parse_mode || ""),
+    raw_response: raw,
+    source_url: String(snapshot.source_url || "")
+  };
+}
+
+function snapshotHtmlFromSource(snapshot) {
+  if (!snapshot) return "";
+  const raw = snapshot.raw_response || "";
+  if (looksLikeHtml(raw)) return raw;
+  try {
+    return findHtmlInPayload(JSON.parse(raw));
+  } catch {
+    return "";
+  }
+}
+
+function findHtmlInPayload(value) {
+  if (typeof value === "string") return looksLikeHtml(value) ? value : "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findHtmlInPayload(item);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (!value || typeof value !== "object") return "";
+  const preferred = ["raw_html", "html", "body_html", "content_html", "email_html", "message_html", "body", "content", "msg", "message"];
+  for (const key of preferred) {
+    if (key in value) {
+      const found = findHtmlInPayload(value[key]);
+      if (found) return found;
+    }
+  }
+  for (const child of Object.values(value)) {
+    const found = findHtmlInPayload(child);
+    if (found) return found;
+  }
+  return "";
+}
+
+function renderSnapshotDetail(box, snapshot, snapshotHtml, message, code) {
+  if (snapshotHtml) {
+    renderHtmlDetail(box, snapshotHtml, snapshot.source_url || message.base_url || "", message.subject || "源站邮件", code);
+    return;
+  }
+  box.innerHTML = `
+    ${code ? codeCardHtml(code) : ""}
+    <div class="source-preview">
+      <div class="source-preview-title">${escapeHtml(message.subject || "源站原始内容")}</div>
+      <pre class="source-preview-body">${escapeHtml(sourceTextFromSnapshot(snapshot, message))}</pre>
+    </div>
+  `;
+  bindCodeCopy(box);
+}
+
+function sourceTextFromSnapshot(snapshot, message) {
+  try {
+    const text = findTextInPayload(JSON.parse(snapshot.raw_response));
+    if (text) return text;
+  } catch {
+    // Fall through to parsed message text.
+  }
+  return message.body || snapshot.raw_response || "";
+}
+
+function findTextInPayload(value) {
+  if (typeof value === "string") return looksLikeHtml(value) ? htmlToText(value) : normalizeNewlines(value);
+  if (Array.isArray(value)) return value.map(findTextInPayload).filter(Boolean).join("\n\n").trim();
+  if (!value || typeof value !== "object") return "";
+  const preferred = ["text", "body", "content", "msg", "message", "detail", "value"];
+  for (const key of preferred) {
+    if (key in value) {
+      const found = findTextInPayload(value[key]);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
+function createMailFrame(html, baseUrl, title) {
+  const frame = document.createElement("iframe");
+  frame.className = "mail-frame";
+  frame.title = title;
+  frame.setAttribute("sandbox", "");
+  frame.setAttribute("referrerpolicy", "no-referrer");
+  frame.srcdoc = withBaseHref(html, baseUrl);
+  return frame;
 }
 
 function withBaseHref(html, baseUrl) {
@@ -138,7 +242,7 @@ function bindCodeCopy(root) {
   });
 }
 
-function normalizeMessage(message) {
+export function normalizeMessage(message) {
   if (!message || typeof message !== "object") return message;
   const body = String(message.body || "").trim();
   if (!body.startsWith("{")) return message;

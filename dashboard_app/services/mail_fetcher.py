@@ -22,14 +22,18 @@ from dashboard_app.utils.text import normalize_source_url, source_host
 
 # per-host connection limiter (concurrent, not sequential)
 _HOST_SEMAPHORES: dict[str, _threading.BoundedSemaphore] = {}
+_HOST_SEMAPHORES_LOCK = _threading.RLock()
 _HOST_MAX_CONCURRENT = 3  # max concurrent requests to the same host
 
 
 def _acquire_host_slot(host: str) -> None:
     """Wait until we can make a request to this host without exceeding concurrency limit."""
-    if host not in _HOST_SEMAPHORES:
-        _HOST_SEMAPHORES[host] = _threading.BoundedSemaphore(_HOST_MAX_CONCURRENT)
-    _HOST_SEMAPHORES[host].acquire()
+    with _HOST_SEMAPHORES_LOCK:
+        semaphore = _HOST_SEMAPHORES.get(host)
+        if semaphore is None:
+            semaphore = _threading.BoundedSemaphore(_HOST_MAX_CONCURRENT)
+            _HOST_SEMAPHORES[host] = semaphore
+    semaphore.acquire()
 
 
 def _release_host_slot(host: str) -> None:
@@ -39,7 +43,7 @@ def _release_host_slot(host: str) -> None:
         sem.release()
 
 
-def fetch_mail_for_account(account_id: str, force: bool = False) -> dict[str, Any]:
+def fetch_mail_for_account(account_id: str, force: bool = False, record_error: bool = True) -> dict[str, Any]:
     # ── cache check (read-only, no lock needed) ──
     accounts, account = find_account(account_id)
     if not account:
@@ -61,8 +65,11 @@ def fetch_mail_for_account(account_id: str, force: bool = False) -> dict[str, An
             accounts2, account2 = find_account(account_id)
             if account2:
                 account2["last_error"] = "缺少收信链接"
-                save_accounts(accounts2)
+            save_accounts(accounts2)
         return {"ok": False, "error": "缺少收信链接", "email": email}
+    parsed_source = urllib.parse.urlparse(source_url)
+    if parsed_source.scheme.lower() not in {"http", "https"} or not parsed_source.netloc:
+        return _mark_fetch_error(account_id, "收信链接格式不正确，仅支持 HTTP/HTTPS", record_error=record_error)
 
     # ── HTTP fetch with retry ──
     fetch_urls = _candidate_source_urls(source_url)
@@ -117,10 +124,10 @@ def fetch_mail_for_account(account_id: str, force: bool = False) -> dict[str, An
             break
         else:
             # success — parse and save
-            return _process_response(account_id, account, used_url, raw, status_code, content_type, source_url)
+            return _process_response(account_id, account, used_url, raw, status_code, content_type, source_url, record_error=record_error)
 
     # all attempts failed
-    return _mark_fetch_error(account_id, last_error)
+    return _mark_fetch_error(account_id, last_error, record_error=record_error)
 
 
 def _candidate_source_urls(source_url: str) -> list[str]:
@@ -171,16 +178,20 @@ def _process_response(
     status_code: int,
     content_type: str,
     account_source_url: str | None = None,
+    *,
+    record_error: bool = True,
 ) -> dict[str, Any]:
     text = _decode_response(raw, content_type)
 
     no_history = _source_no_history_message(text)
     if no_history:
+        if not record_error:
+            return {"ok": False, "error": no_history, "email": account.get("email", account_id)}
         return _mark_no_history(account_id, source_url, status_code, content_type, no_history)
 
     source_error = _source_error_message(text)
     if source_error:
-        return _mark_fetch_error(account_id, source_error, clear_existing_cache=True, fetched=True)
+        return _mark_fetch_error(account_id, source_error, clear_existing_cache=True, fetched=True, record_error=record_error)
 
     messages, parse_mode = messages_from_response(text, content_type, str(account.get("id")))
     for message in messages:
@@ -197,6 +208,7 @@ def _process_response(
         "status_code": status_code,
         "content_type": content_type,
         "parse_mode": parse_mode,
+        "raw_response": text,
         "message_count": len(messages),
         "messages": messages,
         "cached": False,
@@ -300,7 +312,10 @@ def _mark_fetch_error(
     *,
     clear_existing_cache: bool = False,
     fetched: bool = False,
+    record_error: bool = True,
 ) -> dict[str, Any]:
+    if not record_error:
+        return {"ok": False, "error": error, "email": account_id}
     with STORE_LOCK:
         accounts, account = find_account(account_id)
         if account:

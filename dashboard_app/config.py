@@ -30,6 +30,14 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 ROOT = PACKAGE_DIR.parent
 
 
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(value, maximum))
+
+
 settings = Settings(
     root=ROOT,
     package_dir=PACKAGE_DIR,
@@ -39,9 +47,9 @@ settings = Settings(
     template_path=PACKAGE_DIR / "templates" / "index.html",
     static_dir=PACKAGE_DIR / "static",
     panel_password=os.environ.get("ICLOUD_PANEL_PASSWORD", "changeme"),
-    scan_workers=max(1, min(int(os.environ.get("ICLOUD_SCAN_WORKERS", "5")), 16)),
-    fetch_timeout_seconds=max(5, min(int(os.environ.get("ICLOUD_FETCH_TIMEOUT", "25")), 90)),
-    fetch_retries=max(0, min(int(os.environ.get("ICLOUD_FETCH_RETRIES", "4")), 8)),
-    retry_pass_delay=max(5, min(int(os.environ.get("ICLOUD_RETRY_DELAY", "30")), 300)),
-    max_retry_passes=max(1, min(int(os.environ.get("ICLOUD_MAX_RETRY_PASSES", "3")), 10)),
+    scan_workers=_env_int("ICLOUD_SCAN_WORKERS", 5, 1, 16),
+    fetch_timeout_seconds=_env_int("ICLOUD_FETCH_TIMEOUT", 25, 5, 90),
+    fetch_retries=_env_int("ICLOUD_FETCH_RETRIES", 4, 0, 8),
+    retry_pass_delay=_env_int("ICLOUD_RETRY_DELAY", 30, 5, 300),
+    max_retry_passes=_env_int("ICLOUD_MAX_RETRY_PASSES", 3, 1, 10),
 )

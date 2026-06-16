@@ -1,4 +1,4 @@
-import { $ } from "./dom.js";
+﻿import { $ } from "./dom.js";
 
 export function setupTheme() {
   const savedTheme = localStorage.getItem("icloud-panel-theme") || "";
@@ -32,6 +32,7 @@ function syncButtons() {
   const isDark = document.documentElement.getAttribute("data-theme") === "dark";
   const isMinimal = document.documentElement.getAttribute("data-visual") === "minimal";
   $("themeToggle").textContent = isDark ? "浅色" : "深色";
-  $("visualToggle").textContent = isMinimal ? "墨玉模式" : "极简模式";
+  $("visualToggle").textContent = isMinimal ? "手绘模式" : "极简模式";
 }
+
 

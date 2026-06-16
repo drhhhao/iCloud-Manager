@@ -2,19 +2,24 @@ import { api, sessionStatus } from "./api.js";
 import { $ } from "./dom.js";
 import { addLog, toast } from "./notifications.js";
 import { renderAccounts, setCurrentFilter, updateStats } from "./accounts_view.js";
-import { renderMailDetail, renderMailList, updateMailboxHeader } from "./mail_view.js";
+import { normalizeMessage, renderMailDetail, renderMailList, updateMailboxHeader } from "./mail_view.js";
 import { setupTheme } from "./theme.js";
 
 const state = {
   accounts: [],
   selectedId: "",
   messages: [],
+  filteredMessages: [],
+  mailListEmptyText: "",
   selectedMessageId: "",
   noHistory: false,
   authenticated: false,
   busy: false,
+  importing: false,
   scan: null
 };
+
+let accountLoadSeq = 0;
 
 function currentAccount() {
   return state.accounts.find((item) => item.id === state.selectedId) || null;
@@ -43,6 +48,66 @@ function renderAccountList(options = {}) {
   }
 }
 
+function normalizeDateOnly(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function messageMatchesFilters(message) {
+  const displayMessage = normalizeMessage(message);
+  const keyword = $("mail-search-input")?.value.trim().toLowerCase() || "";
+  const code = $("code-search-input")?.value.trim() || "";
+  const from = $("date-from-input")?.value || "";
+  const to = $("date-to-input")?.value || "";
+  const haystack = [
+    displayMessage.subject,
+    displayMessage.from,
+    displayMessage.to,
+    displayMessage.body,
+    displayMessage.date
+  ].map((value) => String(value || "").toLowerCase()).join("\n");
+  if (keyword && !haystack.includes(keyword)) return false;
+  if (code && !String(displayMessage.verification_code || "").includes(code)) return false;
+  const messageDate = normalizeDateOnly(displayMessage.date || "");
+  if (from && messageDate && messageDate < from) return false;
+  if (to && messageDate && messageDate > to) return false;
+  if ((from || to) && !messageDate) return false;
+  return true;
+}
+
+function messagesFromCache(cache) {
+  const messages = (cache?.messages || []).map((message) => ({...message}));
+  if (messages.length === 1) {
+    const sourceUrl = cache?.source_url || cache?.account_source_url || "";
+    if (cache?.raw_response) {
+      messages[0].source_snapshot = {
+        content_type: cache?.content_type || "",
+        parse_mode: cache?.parse_mode || "",
+        raw_response: cache?.raw_response || "",
+        source_url: sourceUrl
+      };
+    }
+  }
+  return messages;
+}
+
+function applyMailFilters({preserveSelection = true} = {}) {
+  const filtered = state.messages.filter(messageMatchesFilters);
+  state.filteredMessages = filtered;
+  if (!preserveSelection || !filtered.some((item) => item.id === state.selectedMessageId)) {
+    state.selectedMessageId = filtered[0]?.id || "";
+  }
+  const count = $("mail-filter-count");
+  if (count) count.textContent = `${filtered.length} / ${state.messages.length} 封邮件`;
+  const emptyMsg = state.messages.length && !filtered.length ? "没有匹配筛选条件的邮件" : state.noHistory ? "无历史邮件" : "暂无缓存邮件";
+  state.mailListEmptyText = emptyMsg;
+  renderMailList(state, selectMessage);
+  const selected = filtered.find((item) => item.id === state.selectedMessageId) || null;
+  renderMailDetail(selected, filtered.length, emptyMsg);
+}
+
 function renderScan(scan) {
   state.scan = scan || {};
   const status = state.scan.status || "idle";
@@ -62,11 +127,12 @@ function renderScan(scan) {
     running: "扫描中",
     retry_waiting: "等待重试",
     cancelling: "取消中",
+    cancelled: "已取消",
     done: "已完成",
     idle: "空闲",
   };
   $("scan-status-pill").textContent = pillMap[status] || status;
-  $("scan-status-pill").classList.toggle("fail", failed > 0 && status === "done");
+  $("scan-status-pill").classList.toggle("fail", failed > 0 && (status === "done" || status === "cancelled"));
   $("scan-status-pill").classList.toggle("warn", status === "retry_waiting");
 
   // Cancel button visibility
@@ -97,6 +163,8 @@ function renderScan(scan) {
     $("scan-all-btn").disabled = false;
   } else if (status === "cancelling") {
     $("scan-status-text").textContent = "正在取消…";
+  } else if (status === "cancelled") {
+    $("scan-status-text").textContent = `扫描已取消：已完成 ${done}/${total}，成功 ${success}，仍失败 ${failed}，共 ${messages} 封邮件`;
   } else {
     $("scan-status-text").textContent = "导入后会自动扫描历史邮件";
     $("scan-all-btn").disabled = false;
@@ -136,6 +204,8 @@ async function loadState(keepSelection = true, options = {}) {
 async function selectAccount(id) {
   state.selectedId = id;
   state.messages = [];
+  state.filteredMessages = [];
+  state.mailListEmptyText = "";
   state.selectedMessageId = "";
   state.noHistory = false;
   renderAccountList();
@@ -143,21 +213,26 @@ async function selectAccount(id) {
 }
 
 async function loadAccount(id) {
+  const loadSeq = ++accountLoadSeq;
   const account = state.accounts.find((item) => item.id === id);
   updateMailboxHeader(account, null, state.busy);
   if (!account) return;
   try {
     const data = await api(`/api/account?id=${encodeURIComponent(id)}`);
+    if (loadSeq !== accountLoadSeq || state.selectedId !== id || data.account?.id !== id) return;
     const cache = data.cache || null;
-    state.messages = cache?.messages || [];
+    state.messages = messagesFromCache(cache);
     state.noHistory = Boolean(cache?.no_history || data.account?.no_history);
-    state.selectedMessageId = state.messages[0]?.id || "";
+    state.filteredMessages = [];
+    state.mailListEmptyText = "";
+    state.selectedMessageId = "";
     const errorNote = data.account?.last_error || "";
     const emptyMsg = errorNote ? `⚠ ${errorNote}` : state.noHistory ? "无历史邮件" : "";
-    renderMailList(state, selectMessage);
-    renderMailDetail(state.messages[0] || null, state.messages.length, emptyMsg);
+    applyMailFilters({preserveSelection: false});
+    if (!state.filteredMessages.length && emptyMsg) renderMailDetail(null, 0, emptyMsg);
     updateMailboxHeader(data.account, cache, state.busy);
   } catch (err) {
+    if (loadSeq !== accountLoadSeq || state.selectedId !== id) return;
     addLog(err.message);
   }
 }
@@ -165,23 +240,23 @@ async function loadAccount(id) {
 function selectMessage(id) {
   state.selectedMessageId = id;
   renderMailList(state, selectMessage);
-  renderMailDetail(state.messages.find((item) => item.id === id) || null, state.messages.length);
+  renderMailDetail(state.filteredMessages.find((item) => item.id === id) || null, state.filteredMessages.length);
 }
 
 async function fetchSelected(force = true) {
   const account = currentAccount();
   if (!account) return;
   state.busy = true;
-  updateMailboxHeader(account, null, true);
   $("fetch-btn").textContent = "刷新中";
+  $("fetch-btn").classList.add("isBusy");
+  updateMailboxHeader(account, null, true);
   try {
     const data = await api("/api/fetch_mail", {method: "POST", body: {id: account.id, force}});
     const cache = data.cache || {};
-    state.messages = cache.messages || [];
+    state.messages = messagesFromCache(cache);
     state.noHistory = Boolean(cache.no_history || data.account?.no_history);
-    state.selectedMessageId = state.messages[0]?.id || "";
-    renderMailList(state, selectMessage);
-    renderMailDetail(state.messages[0] || null, state.messages.length, state.noHistory ? "无历史邮件" : "");
+    state.selectedMessageId = "";
+    applyMailFilters({preserveSelection: false});
     addLog(`${account.email} 刷新完成，${state.messages.length} 封邮件`);
     toast("邮件已更新");
     const index = state.accounts.findIndex((item) => item.id === account.id);
@@ -202,11 +277,18 @@ async function fetchSelected(force = true) {
   } finally {
     state.busy = false;
     $("fetch-btn").textContent = "刷新邮件";
+    $("fetch-btn").classList.remove("isBusy");
     updateMailboxHeader(currentAccount(), {message_count: state.messages.length}, false);
   }
 }
 
 async function importText() {
+  if (state.importing) return;
+  const importBtn = $("import-btn");
+  state.importing = true;
+  importBtn.disabled = true;
+  importBtn.classList.add("isBusy");
+  importBtn.textContent = "导入中";
   try {
     const data = await api("/api/import", {method: "POST", body: {text: $("import-text").value}});
     const s = data.stats || {};
@@ -222,13 +304,18 @@ async function importText() {
   } catch (err) {
     addLog(`导入失败：${err.message}`);
     toast(err.message, "error");
+  } finally {
+    state.importing = false;
+    importBtn.disabled = false;
+    importBtn.classList.remove("isBusy");
+    importBtn.textContent = "导入邮箱";
   }
 }
 
 async function scanAllHistory() {
-  const acc = state.accounts.filter(a => a.has_source && !a.cached);
+  const acc = state.accounts.filter(a => a.has_source);
   if (acc.length > 50) {
-    if (!confirm(`将扫描全部 ${acc.length} 个未缓存的邮箱，确认开始？`)) return;
+    if (!confirm(`将扫描全部 ${acc.length} 个带收信链接的邮箱，确认开始？`)) return;
   }
   try {
     const data = await api("/api/scan_start", {method: "POST", body: {scope: "all"}});
@@ -275,9 +362,11 @@ async function clearSelectedCache() {
   try {
     await api("/api/clear_cache", {method: "POST", body: {id: account.id}});
     state.messages = [];
+    state.filteredMessages = [];
+    state.mailListEmptyText = "";
     state.selectedMessageId = "";
     state.noHistory = false;
-    renderMailList(state, selectMessage);
+    applyMailFilters({preserveSelection: false});
     addLog(`${account.email} 缓存已清理`);
     toast("缓存已清理", "warn");
     await loadState(true);
@@ -295,6 +384,8 @@ async function deleteSelected() {
     addLog(`${account.email} 已删除`);
     state.selectedId = "";
     state.messages = [];
+    state.filteredMessages = [];
+    state.mailListEmptyText = "";
     state.noHistory = false;
     toast("邮箱已删除", "warn");
     await loadState(false);
@@ -357,6 +448,17 @@ function bindEvents() {
   $("cancel-scan-btn").addEventListener("click", cancelScan);
   $("search-input").addEventListener("input", () => renderAccountList({preserveScroll: false}));
   $("clear-search-btn").addEventListener("click", () => {$("search-input").value = ""; renderAccountList({preserveScroll: false});});
+  $("mail-search-input").addEventListener("input", () => applyMailFilters());
+  $("code-search-input").addEventListener("input", () => applyMailFilters());
+  $("date-from-input").addEventListener("change", () => applyMailFilters());
+  $("date-to-input").addEventListener("change", () => applyMailFilters());
+  $("clear-mail-filter-btn").addEventListener("click", () => {
+    $("mail-search-input").value = "";
+    $("code-search-input").value = "";
+    $("date-from-input").value = "";
+    $("date-to-input").value = "";
+    applyMailFilters({preserveSelection: false});
+  });
   $("fetch-btn").addEventListener("click", () => fetchSelected(true));
   $("clear-cache-btn").addEventListener("click", clearSelectedCache);
   $("delete-btn").addEventListener("click", deleteSelected);
@@ -366,8 +468,13 @@ function bindEvents() {
     const file = event.target.files?.[0];
     if (!file) return;
     $("file-name").textContent = file.name;
-    $("import-text").value = await file.text();
-    addLog(`已载入文件：${file.name}`);
+    try {
+      $("import-text").value = await file.text();
+      addLog(`已载入文件：${file.name}`);
+    } catch (err) {
+      addLog(`读取文件失败：${err.message}`);
+      toast("读取文件失败", "error");
+    }
   });
   setupFilterChips();
 }
